@@ -1,0 +1,11 @@
+EngineSize,Cylinders,FuelType,FuelConsumption,CO2Emissions
+2.0,4,Gasoline,8.5,196
+2.4,4,Gasoline,9.2,212
+1.5,4,Gasoline,6.0,140
+3.5,6,Gasoline,11.0,260
+5.0,8,Premium Gasoline,15.0,350
+3.0,6,Diesel,10.0,230
+2.0,4,Gasoline,8.8,200
+2.5,4,Gasoline,9.5,220
+4.0,8,Gasoline,12.5,290
+1.6,4,Diesel,5.5,130
