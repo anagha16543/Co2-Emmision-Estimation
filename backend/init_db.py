@@ -4,8 +4,9 @@ import os
 def init():
     print("Initializing database...")
     try:
-        if os.path.exists("users.db"):
-            print("Database already exists.")
+        db_uri = app.config["SQLALCHEMY_DATABASE_URI"]
+    if db_uri.startswith("sqlite:///") and os.path.exists(db_uri.replace("sqlite:///", "")):
+         print(f"Database already exists at {db_uri}")
         
         with app.app_context():
             db.create_all()

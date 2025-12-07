@@ -32,8 +32,18 @@ from model_utils import train_and_select, save_pipeline, load_pipeline
 # ---------------------------------------------------------------------
 # APP & CONFIG
 # ---------------------------------------------------------------------
+BASE_DIR = Path(__file__).resolve().parent
+
+# ---------------------------------------------------------------------
+# APP & CONFIG
+# ---------------------------------------------------------------------
 app = Flask(__name__)
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///users.db"
+# Use absolute path for DB to avoid CWD ambiguity
+DB_PATH = BASE_DIR / "instance" / "users.db"
+# Ensure instance dir exists
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DB_PATH.as_posix()}"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["JWT_SECRET_KEY"] = "super-secret-key-change-this-in-production"
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=60)
@@ -43,7 +53,6 @@ CORS(app)
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
 
-BASE_DIR = Path(__file__).resolve().parent
 MODEL_DIR = BASE_DIR / "saved_models"
 MODEL_PATH = MODEL_DIR / "best_model.joblib"
 METADATA_PATH = MODEL_DIR / "metadata.json"
@@ -362,7 +371,7 @@ def signup():
     except Exception as e:
         db.session.rollback()
         print(f"Signup error: {e}")
-        return jsonify({"error": "Failed to create account"}), 500
+        return jsonify({"error": f"Failed to create account: {str(e)}"}), 500
 
     return jsonify({"message": "User created successfully"}), 201
 
@@ -608,5 +617,6 @@ def download_model():
 # MAIN
 # ---------------------------------------------------------------------
 if __name__ == "__main__":
+    print(f"DEBUG: STARTING APP. DB URI: {app.config['SQLALCHEMY_DATABASE_URI']}")
     # debug=False to prevent Windows ntdll.dll crashes in some environments
     app.run(host="0.0.0.0", port=5000, debug=False)
