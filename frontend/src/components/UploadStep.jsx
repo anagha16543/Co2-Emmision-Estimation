@@ -92,7 +92,11 @@ function UploadStep({ apiBase, onUploadComplete, onError }) {
         const trueCols = fields;
 
         if (analysis.warnings?.length > 0) {
-          analysis.warnings.forEach(w => toast.warning(w));
+          if (analysis.warnings.length <= 3) {
+            analysis.warnings.forEach(w => toast(w, { icon: '⚠️' }));
+          } else {
+            toast(`Dataset ready with ${analysis.warnings.length} warnings (see details below)`, { icon: '⚠️' });
+          }
         }
 
         setUploadStats({ rows: trueRows, columns: trueCols.length });
@@ -112,7 +116,21 @@ function UploadStep({ apiBase, onUploadComplete, onError }) {
         throw new Error(response.data.error || "Validation failed");
       }
     } catch (error) {
-      const msg = error.response?.data?.error || "Validation failed";
+      console.error("Upload Error Details:", {
+        message: error.message,
+        response: error.response,
+        status: error.response?.status,
+        data: error.response?.data
+      });
+
+      const serverError = error.response?.data?.error;
+      const statusText = error.response?.statusText;
+      const fallbackError = error.message === "Network Error"
+        ? "Network Error: Could not connect to backend (is it running?)"
+        : `Validation failed: ${error.message}`;
+
+      const msg = serverError || statusText || fallbackError;
+
       onError(msg);
       toast.error(msg);
       setFileName(null);

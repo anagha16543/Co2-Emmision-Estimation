@@ -235,6 +235,14 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns=new_cols)
 
 
+def _deduplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove duplicate columns, keeping the first occurrence.
+    """
+    df = df.loc[:, ~df.columns.duplicated(keep='first')]
+    return df
+
+
 def _enforce_numeric_types(df: pd.DataFrame) -> pd.DataFrame:
     """
     Strip units like '196 g/km' -> '196' then convert to numeric.
@@ -287,7 +295,7 @@ def _analyze_dataset(df: pd.DataFrame) -> dict:
         )
 
         if missing > 0:
-            analysis["warnings"].append(f"Column '{col}' has {missing} missing values")
+            analysis["warnings"].append(f"Column '{col}' has {missing} missing values (will be auto-filled)")
 
     if "CO2Emissions" in df.columns:
         non_missing = int(df["CO2Emissions"].notna().sum())
@@ -303,7 +311,13 @@ def _analyze_dataset(df: pd.DataFrame) -> dict:
 def upload():
     try:
         df = _read_csv_from_request()
+        
+        # Clean up "Unnamed" colums (artifacts from pandas to_csv) and empty columns
+        df = df.loc[:, ~df.columns.str.contains('^Unnamed', case=False)]
+        df = df.dropna(axis=1, how='all')
+
         df = _normalize_columns(df)
+        df = _deduplicate_columns(df)
         df = _enforce_numeric_types(df)
         
         # Don't raise error, just analyze
@@ -443,6 +457,7 @@ def train():
     try:
         df = _parse_csv_text(csv_text)
         df = _normalize_columns(df)
+        df = _deduplicate_columns(df)
         df = _enforce_numeric_types(df)
         _ensure_required_columns(df)
 
@@ -469,6 +484,7 @@ def train():
         pipeline = result["pipeline"]
         metrics = result["metrics"]
         best_params = result["best_params"]
+        features_info = result.get("features_info", {})
 
         # Ensure model directory exists BEFORE saving
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -484,7 +500,8 @@ def train():
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "model_type": best_params.get("model"),
             "best_alpha": best_params.get("best_alpha"),
-            "metrics": serializable_metrics
+            "metrics": serializable_metrics,
+            "features_info": features_info
         }
 
         METADATA_PATH.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
@@ -493,7 +510,8 @@ def train():
             "success": True,
             "metrics": serializable_metrics,
             "params": best_params,
-            "message": f"Model trained! {dropped} rows removed."
+            "features_info": features_info,
+            "message": f"Model trained! {dropped} rows removed. High-cardinality features were ignored for speed."
         })
 
     except Exception as exc:
@@ -522,12 +540,36 @@ def predict():
 
     df = pd.DataFrame([features])
 
+    # NORMALIZE incoming keys to match training schema
+    # The frontend might send "Engine Size(L)" but we trained on "EngineSize"
+    df = _normalize_columns(df)
+
     # Ensure correct feature order if available
     if hasattr(pipeline, "feature_names_in_"):
         expected = list(pipeline.feature_names_in_)
+        
+        # Check for missing features
         missing = [c for c in expected if c not in df.columns]
+        
+        if missing:
+             # Try one last 'fuzzy' rename if model expects 'EngineSize' but we have 'Engine Size'
+             rename_map = {}
+             lower_input = {c.lower().replace(" ","").replace("(l)",""): c for c in df.columns}
+             
+             for exp in missing:
+                 exp_lower = exp.lower().replace(" ","")
+                 if exp_lower in lower_input:
+                     rename_map[lower_input[exp_lower]] = exp
+             
+             if rename_map:
+                 df = df.rename(columns=rename_map)
+                 # Recheck missing after fuzzy fix
+                 missing = [c for c in expected if c not in df.columns]
+
         if missing:
             return jsonify({"error": f"Missing features: {missing}"}), 400
+        
+        # Reorder to match model
         df = df[expected]
 
     try:

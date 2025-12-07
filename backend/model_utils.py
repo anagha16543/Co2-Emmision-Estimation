@@ -18,40 +18,53 @@ warnings.filterwarnings('ignore', category=ConvergenceWarning)
 warnings.filterwarnings('ignore', category=UserWarning)
 
 
-def create_preprocessor(
-    df: pd.DataFrame,
-    target_col: str = "CO2Emissions",
-) -> Tuple[ColumnTransformer, List[str], List[str]]:
+def clean_and_classify_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str], List[str]]:
     """
-    Build a ColumnTransformer with scaling for numeric and one-hot for categoricals.
-    Now includes imputation for missing values.
+    Cleans features by coercing to numeric where appropriate and classifying columns.
+    Returns: (cleaned_df, numeric_columns, categorical_columns)
     """
-    if target_col not in df.columns:
-        raise ValueError(f"Target column '{target_col}' not found in DataFrame.")
-
-    feature_df = df.drop(columns=[target_col])
+    # Create a copy to avoid SettingWithCopy warnings
+    clean_df = df.copy()
     
     # Remove columns that are completely empty
-    feature_df = feature_df.dropna(axis=1, how='all')
+    clean_df = clean_df.dropna(axis=1, how='all')
     
     num_cols: List[str] = []
     cat_cols: List[str] = []
 
-    for col in feature_df.columns:
-        # Try to convert to numeric first
-        try:
-            feature_df[col] = pd.to_numeric(feature_df[col], errors='coerce')
-            if feature_df[col].notna().any():  # If any non-null numeric values
-                num_cols.append(col)
-            else:
+    for col in clean_df.columns:
+        # Try to convert to numeric
+        numeric_series = pd.to_numeric(clean_df[col], errors='coerce')
+        
+        # Calculate ratio of valid numeric values
+        # If > 50% are valid numbers, treat as numeric
+        valid_ratio = numeric_series.notna().mean()
+        
+        if valid_ratio > 0.5:
+            clean_df[col] = numeric_series
+            num_cols.append(col)
+        else:
+            # Treat as categorical
+            # Check cardinality: if too many unique values, drop it to prevent massive expansion
+            # (e.g. "Model" in car datasets can have 1000+ unique values)
+            clean_df[col] = clean_df[col].astype(str)
+            n_unique = clean_df[col].nunique()
+            
+            if n_unique <= 20:
                 cat_cols.append(col)
-        except:
-            cat_cols.append(col)
+            # else: drop, effectively ignoring this column for training
 
-    # Sort for reproducibility
-    num_cols = sorted(num_cols)
-    cat_cols = sorted(cat_cols)
+    return clean_df, sorted(num_cols), sorted(cat_cols)
 
+
+
+def create_preprocessor(
+    num_cols: List[str],
+    cat_cols: List[str]
+) -> ColumnTransformer:
+    """
+    Build a ColumnTransformer given lists of numeric and categorical columns.
+    """
     transformers = []
     if num_cols:
         transformers.append(
@@ -81,11 +94,10 @@ def create_preprocessor(
         )
 
     if not transformers:
-        raise ValueError("No feature columns found to preprocess after cleaning.")
+        # Fallback if everything was dropped? Should not happen often.
+        raise ValueError("No feature columns found to preprocess.")
 
-    preprocessor = ColumnTransformer(transformers=transformers)
-
-    return preprocessor, num_cols, cat_cols
+    return ColumnTransformer(transformers=transformers)
 
 
 def evaluate_model_cv(
@@ -151,8 +163,7 @@ def train_and_select(
     cv: int = 5,
 ) -> Dict[str, Any]:
     """
-    Train a pipeline and (for ridge/lasso) search over alpha.
-    Now handles missing values through imputation.
+    Train a pipeline and search over alpha.
     """
     try:
         if target_col not in df.columns:
@@ -165,7 +176,7 @@ def train_and_select(
         if len(df) < 10:
             return {"error": f"Not enough data after cleaning. Need at least 10 rows, got {len(df)}."}
         
-        X = df.drop(columns=[target_col])
+        X_raw = df.drop(columns=[target_col])
         y = df[target_col]
         
         # Check if target has variance
@@ -177,15 +188,68 @@ def train_and_select(
         if y.isna().any():
             return {"error": "Target column contains non-numeric values."}
 
+        # --- FEATURE SELECTION (User Request: Top 5 Important Features) ---
+        # We prioritize physics-based features known to affect CO2.
+        # Primary: Check for standard normalized names (from app.py _normalize_columns)
+        target_features_priority = [
+            "EngineSize",
+            "Cylinders",
+            "FuelConsumption",
+            "FuelType", 
+            "VehicleClass"
+        ]
+        
+        # Secondary patterns if exact names not found
+        important_patterns = [
+            r"engine.*size",       
+            r"cylinders?",          
+            r"fuel.*cons",         # Broader: catch any consumption
+            r"fuel.*type",         
+            r"vehicle.*class"
+        ]
+        
+        selected_cols = []
+        
+        
+        # 1. Try exact matches first
+        for target in target_features_priority:
+            if target in X_raw.columns:
+                selected_cols.append(target)
+        
+        # 2. If we found fewer than 5, try regex on REMAINING columns to find standard features
+        # only if we haven't found that category yet
+        lower_cols = {c.lower(): c for c in X_raw.columns if c not in selected_cols}
+        import re
+        for pattern in important_patterns:
+            for col_lower, original_col in lower_cols.items():
+                if re.search(pattern, col_lower) and original_col not in selected_cols:
+                    selected_cols.append(original_col)
+                    break 
+        
+        # 3. STRICT MODE: Do NOT fill with random remaining columns.
+        # Use only what was found from the priority list/regex.
+        
+        print(f"DEBUG: Selected Strictly {len(selected_cols)} features: {selected_cols}")
+        if not selected_cols:
+             return {"error": "Could not find any of the required vehicle features (Engine, Cylinders, Fuel, Class) in the dataset."}
+             
+        X_raw = X_raw[selected_cols]
+        # ------------------------------------------------------------------
+
+        # CLEAN AND CLASSIFY FEATURES
+        # This gives us X_clean where numeric columns are actually numeric (with NaNs)
+        try:
+            X_clean, num_cols, cat_cols = clean_and_classify_features(X_raw)
+        except Exception as e:
+             return {"error": f"Feature preprocessing failed: {str(e)}"}
+
         # Create preprocessor
         try:
-            preprocessor, num_cols, cat_cols = create_preprocessor(df, target_col=target_col)
+             preprocessor = create_preprocessor(num_cols, cat_cols)
         except Exception as e:
             return {"error": f"Failed to create preprocessor: {str(e)}"}
-
-        # Check if we have any features
-        if len(num_cols) == 0 and len(cat_cols) == 0:
-            return {"error": "No valid features found after preprocessing."}
+            
+        print(f"DEBUG: Num cols: {len(num_cols)}, Cat cols: {len(cat_cols)}")
 
         model_type = model_type.lower()
 
@@ -197,10 +261,22 @@ def train_and_select(
                     ("model", base_model),
                 ]
             )
-            metrics = evaluate_model_cv(pipeline, X, y, cv=cv)
             best_params = {"model": "linear", "best_alpha": None}
-            pipeline.fit(X, y)
-            return {"pipeline": pipeline, "metrics": metrics, "best_params": best_params}
+            pipeline.fit(X_clean, y)
+            
+            features_info = {}
+            for col in num_cols:
+                 features_info[col] = {"type": "number"}
+            for col in cat_cols:
+                 unique_vals = sorted(X_clean[col].dropna().unique().tolist())
+                 features_info[col] = {"type": "select", "options": unique_vals}
+
+            return {
+                "pipeline": pipeline, 
+                "metrics": metrics, 
+                "best_params": best_params,
+                "features_info": features_info
+            }
 
         if model_type == "ridge":
             model = Ridge(random_state=42)
@@ -217,15 +293,16 @@ def train_and_select(
                 ("model", model),
             ]
         )
-
+        
         # Adjust cv if not enough samples
-        n_samples = len(X)
+        n_samples = len(X_clean)
         if n_samples < cv:
             cv = max(2, n_samples - 1)
         
         param_grid = {"model__alpha": alpha_grid}
         kf = KFold(n_splits=cv, shuffle=True, random_state=42)
-
+        
+        # Use X_clean for fitting
         gs = GridSearchCV(
             pipeline,
             param_grid=param_grid,
@@ -234,16 +311,32 @@ def train_and_select(
             n_jobs=1,
             error_score='raise'
         )
-        gs.fit(X, y)
+        gs.fit(X_clean, y)
 
         best_pipeline = gs.best_estimator_
         best_alpha = float(gs.best_params_["model__alpha"])
 
-        metrics = evaluate_model_cv(best_pipeline, X, y, cv=cv)
+        metrics = evaluate_model_cv(best_pipeline, X_clean, y, cv=cv)
         best_params = {"model": model_type, "best_alpha": best_alpha}
 
-        return {"pipeline": best_pipeline, "metrics": metrics, "best_params": best_params}
+        # Build feature metadata for frontend
+        features_info = {}
+        # Numeric features
+        for col in num_cols:
+             features_info[col] = {"type": "number"}
         
+        # Categorical features with options
+        for col in cat_cols:
+             unique_vals = sorted(X_clean[col].dropna().unique().tolist())
+             features_info[col] = {"type": "select", "options": unique_vals}
+
+        return {
+            "pipeline": best_pipeline, 
+            "metrics": metrics, 
+            "best_params": best_params,
+            "features_info": features_info
+        }
+
     except Exception as e:
         return {"error": f"Training failed: {str(e)}"}
 

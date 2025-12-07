@@ -98,6 +98,27 @@ function TrainStep({ apiBase, csvText, uploadInfo, onTrainComplete, onError, onB
               </span>
             </div>
           </div>
+
+          {/* Warnings Section */}
+          {uploadInfo.analysis?.warnings?.length > 0 && (
+            <div className="mt-4 border-t border-slate-700 pt-3">
+              <details className="group">
+                <summary className="flex cursor-pointer items-center text-yellow-400 text-xs font-medium hover:text-yellow-300">
+                  <span className="mr-2">⚠️ Found {uploadInfo.analysis.warnings.length} potential issues</span>
+                  <svg className="h-4 w-4 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </summary>
+                <div className="mt-2 max-h-32 overflow-y-auto rounded-lg bg-yellow-900/10 p-2">
+                  <ul className="list-inside list-disc text-xs text-yellow-200/80 space-y-1">
+                    {uploadInfo.analysis.warnings.map((w, i) => (
+                      <li key={i}>{w}</li>
+                    ))}
+                  </ul>
+                </div>
+              </details>
+            </div>
+          )}
         </div>
       )}
 

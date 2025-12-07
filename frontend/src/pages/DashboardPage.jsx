@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { useAuth } from "../context/AuthContext";
 import { Link } from "react-router-dom";
@@ -8,7 +8,7 @@ import TrainStep from "../components/TrainStep.jsx";
 import PredictStep from "../components/PredictStep.jsx";
 import ResultsStep from "../components/ResultsStep.jsx";
 
-const API_BASE = "http://localhost:5000";
+const API_BASE = "http://127.0.0.1:5000";
 
 const fadeInUp = {
     initial: { opacity: 0, y: 8 },
@@ -26,25 +26,52 @@ export default function DashboardPage() {
     const [params, setParams] = useState(null);
     const [metadata, setMetadata] = useState(null);
     const [prediction, setPrediction] = useState(null);
+    const [modelFeatures, setModelFeatures] = useState(null);
     const [globalError, setGlobalError] = useState("");
 
-    const handleUploadComplete = ({ csvText, rows, columns, fuelTypes }) => {
+    // Load existing model metadata on mount
+    useEffect(() => {
+        const loadModel = async () => {
+            try {
+                const token = localStorage.getItem("access_token");
+                if (!token) return;
+
+                const response = await fetch(`${API_BASE}/model`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    setMetadata(data);
+                    if (data.features_info) {
+                        setModelFeatures(data.features_info);
+                    }
+                }
+            } catch (err) {
+                console.log("No existing model found or failed to load");
+            }
+        };
+        loadModel();
+    }, []);
+
+    const handleUploadComplete = ({ csvText, rows, columns, fuelTypes, analysis }) => {
         setCsvText(csvText);
         setColumns(columns);
         setFuelTypes(fuelTypes);
-        setUploadInfo({ rows, columns });
+        setUploadInfo({ rows, columns, analysis });
         setMetrics(null);
         setParams(null);
         setMetadata(null);
+        setModelFeatures(null);
         setPrediction(null);
         setGlobalError("");
         setCurrentStep(2);
     };
 
-    const handleTrainComplete = ({ metrics, params, metadata }) => {
+    const handleTrainComplete = ({ metrics, params, metadata, features_info }) => {
         setMetrics(metrics);
         setParams(params);
         setMetadata(metadata);
+        setModelFeatures(features_info);
         setGlobalError("");
         setCurrentStep(3);
     };
@@ -92,6 +119,7 @@ export default function DashboardPage() {
                     <PredictStep
                         apiBase={API_BASE}
                         featureNames={metadata?.feature_names_original || columns.filter(c => c !== "CO2Emissions")}
+                        modelFeatures={modelFeatures}
                         targetColumn={metadata?.target_column || "CO2Emissions"}
                         fuelTypes={fuelTypes}
                         onPrediction={handlePrediction}

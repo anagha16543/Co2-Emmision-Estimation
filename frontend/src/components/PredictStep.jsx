@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { motion } from "framer-motion";
 import { Toaster, toast } from "react-hot-toast";
 import api from "../utils/api";
@@ -8,13 +8,43 @@ const fadeInUp = {
   animate: { opacity: 1, y: 0 },
 };
 
-function PredictStep({ apiBase, featureNames, targetColumn, fuelTypes, onPrediction, onError, onBack }) {
-  const [formData, setFormData] = useState({
-    EngineSize: "",
-    Cylinders: "",
-    FuelType: "",
-    FuelConsumption: ""
-  });
+function PredictStep({ apiBase, featureNames = [], modelFeatures = null, targetColumn, fuelTypes = [], onPrediction, onError, onBack }) {
+  // Determine active features safely
+  const activeFeatures = useMemo(() => {
+    if (modelFeatures && Object.keys(modelFeatures).length > 0) {
+      return Object.keys(modelFeatures);
+    }
+
+    // Fallback: Filter featureNames to only "Important 5" to match backend strictness
+    // independent of whether model is loaded or not.
+    if (!Array.isArray(featureNames)) return [];
+
+    const priorityKeywords = ['engine', 'cylinder', 'fuel', 'class'];
+    return featureNames.filter(name => {
+      const lower = name.toLowerCase();
+      // Exclude specific noisy columns effectively
+      if (lower.includes('city') || lower.includes('hwy') || lower.includes('mpg')) return false;
+      return priorityKeywords.some(kw => lower.includes(kw));
+    });
+  }, [modelFeatures, featureNames]);
+
+  // Initialize form data
+  const [formData, setFormData] = useState({});
+
+  // Sync formData when features change
+  useEffect(() => {
+    setFormData(prev => {
+      const next = { ...prev };
+      activeFeatures.forEach(field => {
+        if (next[field] === undefined) {
+          next[field] = "";
+        }
+      });
+      return next;
+    });
+  }, [activeFeatures]);
+
+
   const [isPredicting, setIsPredicting] = useState(false);
 
   const handleInputChange = (field, value) => {
@@ -26,29 +56,30 @@ function PredictStep({ apiBase, featureNames, targetColumn, fuelTypes, onPredict
 
   const handlePredict = async () => {
     // Validate form
-    const missingFields = featureNames.filter(field => !formData[field]);
+    const missingFields = activeFeatures.filter(field => formData[field] === "" || formData[field] === null || formData[field] === undefined);
+
     if (missingFields.length > 0) {
       toast.error(`Please fill in: ${missingFields.join(", ")}`);
       return;
     }
 
-    // Validate numeric fields
-    const numericFields = ['EngineSize', 'Cylinders', 'FuelConsumption'];
-    for (const field of numericFields) {
-      if (isNaN(formData[field]) || formData[field] === '') {
-        toast.error(`${field} must be a valid number`);
-        return;
-      }
-    }
-
     setIsPredicting(true);
     try {
-      const features = {
-        EngineSize: parseFloat(formData.EngineSize),
-        Cylinders: parseInt(formData.Cylinders),
-        FuelType: formData.FuelType,
-        FuelConsumption: parseFloat(formData.FuelConsumption)
-      };
+      // Construct features object with type conversion
+      const features = {};
+
+      activeFeatures.forEach(field => {
+        const value = formData[field];
+        // If we have type info, coerce types
+        if (modelFeatures && modelFeatures[field]?.type === "number") {
+          features[field] = parseFloat(value);
+        } else if (!modelFeatures) {
+          // Fallback heuristic
+          features[field] = isNaN(value) ? value : parseFloat(value);
+        } else {
+          features[field] = value;
+        }
+      });
 
       const response = await api.post("/predict", {
         features
@@ -69,7 +100,7 @@ function PredictStep({ apiBase, featureNames, targetColumn, fuelTypes, onPredict
     }
   };
 
-  const isFormValid = featureNames.every(field => formData[field]);
+  const isFormValid = activeFeatures.every(field => formData[field] !== "" && formData[field] !== null && formData[field] !== undefined);
 
   return (
     <motion.div
@@ -92,81 +123,42 @@ function PredictStep({ apiBase, featureNames, targetColumn, fuelTypes, onPredict
         <div className="space-y-6">
           <h3 className="text-lg font-semibold text-white">Vehicle Features</h3>
 
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
-                Engine Size (L)
-              </label>
-              <input
-                type="number"
-                step="0.1"
-                min="0.5"
-                max="8.0"
-                value={formData.EngineSize}
-                onChange={(e) => handleInputChange('EngineSize', e.target.value)}
-                placeholder="e.g., 2.0"
-                className="w-full rounded-xl border border-slate-600 bg-slate-800/50 px-4 py-3 text-sm text-slate-200 placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-colors"
-              />
-            </div>
+          <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+            {activeFeatures.map(field => {
+              const featureInfo = modelFeatures?.[field];
+              const isSelect = featureInfo?.type === "select";
+              const isNumber = featureInfo?.type === "number";
 
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
-                Number of Cylinders
-              </label>
-              <select
-                value={formData.Cylinders}
-                onChange={(e) => handleInputChange('Cylinders', e.target.value)}
-                className="w-full rounded-xl border border-slate-600 bg-slate-800/50 px-4 py-3 text-sm text-slate-200 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-colors"
-              >
-                <option value="">Select cylinders</option>
-                <option value="3">3 cylinders</option>
-                <option value="4">4 cylinders</option>
-                <option value="6">6 cylinders</option>
-                <option value="8">8 cylinders</option>
-                <option value="10">10 cylinders</option>
-                <option value="12">12 cylinders</option>
-              </select>
-            </div>
+              return (
+                <div key={field}>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">
+                    {field}
+                  </label>
 
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
-                Fuel Type
-              </label>
-              <select
-                value={formData.FuelType}
-                onChange={(e) => handleInputChange('FuelType', e.target.value)}
-                className="w-full rounded-xl border border-slate-600 bg-slate-800/50 px-4 py-3 text-sm text-slate-200 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-colors"
-              >
-                <option value="">Select fuel type</option>
-                {fuelTypes.map(type => (
-                  <option key={type} value={type}>{type}</option>
-                ))}
-                {!fuelTypes.length && (
-                  <>
-                    <option value="Gasoline">Gasoline</option>
-                    <option value="Diesel">Diesel</option>
-                    <option value="Hybrid">Hybrid</option>
-                    <option value="Electric">Electric</option>
-                  </>
-                )}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
-                Fuel Consumption (L/100km)
-              </label>
-              <input
-                type="number"
-                step="0.1"
-                min="3"
-                max="25"
-                value={formData.FuelConsumption}
-                onChange={(e) => handleInputChange('FuelConsumption', e.target.value)}
-                placeholder="e.g., 8.5"
-                className="w-full rounded-xl border border-slate-600 bg-slate-800/50 px-4 py-3 text-sm text-slate-200 placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-colors"
-              />
-            </div>
+                  {isSelect ? (
+                    <select
+                      value={formData[field] || ""}
+                      onChange={(e) => handleInputChange(field, e.target.value)}
+                      className="w-full rounded-xl border border-slate-600 bg-slate-800/50 px-4 py-3 text-sm text-slate-200 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-colors"
+                    >
+                      <option value="">Select {field}</option>
+                      {featureInfo.options.map(opt => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type={isNumber ? "number" : "text"}
+                      step={isNumber ? "any" : undefined}
+                      value={formData[field] || ""}
+                      onChange={(e) => handleInputChange(field, e.target.value)}
+                      placeholder={`Enter ${field}`}
+                      className="w-full rounded-xl border border-slate-600 bg-slate-800/50 px-4 py-3 text-sm text-slate-200 placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-colors"
+                    />
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -174,11 +166,11 @@ function PredictStep({ apiBase, featureNames, targetColumn, fuelTypes, onPredict
         <div className="space-y-6">
           <h3 className="text-lg font-semibold text-white">Input Summary</h3>
 
-          <div className="rounded-xl bg-slate-800/30 p-4 space-y-3">
-            {featureNames.map(field => (
+          <div className="rounded-xl bg-slate-800/30 p-4 space-y-3 max-h-[300px] overflow-y-auto custom-scrollbar">
+            {activeFeatures.map(field => (
               <div key={field} className="flex justify-between items-center">
                 <span className="text-sm text-slate-400">{field}:</span>
-                <span className="text-sm text-white font-medium">
+                <span className="text-sm text-white font-medium text-right ml-4">
                   {formData[field] || "Not set"}
                 </span>
               </div>

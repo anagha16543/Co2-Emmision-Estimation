@@ -1,10 +1,52 @@
 {
-  "timestamp": "2025-12-06T17:26:11.169783Z",
+  "timestamp": "2025-12-06T21:17:40.477759Z",
   "model_type": "ridge",
-  "best_alpha": 0.01,
+  "best_alpha": 0.1,
   "metrics": {
-    "RMSE": 7.714731707363844,
-    "MAE": 6.27461543593891,
-    "R2": 0.8218454026173893
+    "RMSE": 7.160058668510937,
+    "MAE": 5.128405904431501,
+    "R2": 0.9850043470861962
+  },
+  "features_info": {
+    "Cylinders": {
+      "type": "number"
+    },
+    "EngineSize": {
+      "type": "number"
+    },
+    "FuelConsumption": {
+      "type": "number"
+    },
+    "FuelType": {
+      "type": "select",
+      "options": [
+        "D",
+        "E",
+        "N",
+        "X",
+        "Z"
+      ]
+    },
+    "Vehicle Class": {
+      "type": "select",
+      "options": [
+        "COMPACT",
+        "FULL-SIZE",
+        "MID-SIZE",
+        "MINICOMPACT",
+        "MINIVAN",
+        "PICKUP TRUCK - SMALL",
+        "PICKUP TRUCK - STANDARD",
+        "SPECIAL PURPOSE VEHICLE",
+        "STATION WAGON - MID-SIZE",
+        "STATION WAGON - SMALL",
+        "SUBCOMPACT",
+        "SUV - SMALL",
+        "SUV - STANDARD",
+        "TWO-SEATER",
+        "VAN - CARGO",
+        "VAN - PASSENGER"
+      ]
+    }
   }
 }
